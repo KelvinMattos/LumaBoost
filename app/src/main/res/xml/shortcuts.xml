@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_boost"
+        android:shortcutId="boost"
+        android:shortcutLongLabel="@string/shortcut_boost_long"
+        android:shortcutShortLabel="@string/shortcut_boost">
+        <intent
+            android:action="com.kelvin.lumaboost.BOOST"
+            android:targetClass="com.kelvin.lumaboost.MainActivity"
+            android:targetPackage="com.kelvin.lumaboost" />
+    </shortcut>
+    <shortcut
+        android:enabled="true"
+        android:icon="@drawable/ic_shortcut_clean"
+        android:shortcutId="clean"
+        android:shortcutLongLabel="@string/shortcut_clean_long"
+        android:shortcutShortLabel="@string/shortcut_clean">
+        <intent
+            android:action="com.kelvin.lumaboost.CLEAN"
+            android:targetClass="com.kelvin.lumaboost.MainActivity"
+            android:targetPackage="com.kelvin.lumaboost" />
+    </shortcut>
+</shortcuts>

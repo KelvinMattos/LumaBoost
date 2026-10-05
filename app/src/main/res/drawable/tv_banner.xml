@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Banner da tela inicial do Fire TV / Android TV (320x180). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="320dp"
+    android:height="180dp"
+    android:viewportWidth="320"
+    android:viewportHeight="180">
+    <path
+        android:fillColor="#F6F7F9"
+        android:pathData="M0,0h320v180h-320z" />
+    <group
+        android:scaleX="1.5"
+        android:scaleY="1.5"
+        android:translateX="79"
+        android:translateY="9">
+        <path
+            android:fillColor="#007AFF"
+            android:pathData="M54,14a40,40 0,1 0,0.1 0M54,24a30,30 0,1 1,-0.1 0" />
+        <path
+            android:fillColor="#111827"
+            android:pathData="M59,28L38,58h15l-5,23l23,-33h-16z" />
+    </group>
+</vector>

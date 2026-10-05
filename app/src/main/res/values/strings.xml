@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Luma Boost</string>
+    <string name="shortcut_boost">Otimizar</string>
+    <string name="shortcut_boost_long">Otimizar agora</string>
+    <string name="shortcut_clean">Limpeza</string>
+    <string name="shortcut_clean_long">Limpar arquivos</string>
+    <string name="accessibility_label">Luma Boost · Assistente</string>
+    <string name="accessibility_summary">Fecha apps escondidos e limpa o lixo de cada app tocando em \"Forçar parada\" e \"Limpar cache\" por você.</string>
+    <string name="accessibility_description">O Android não deixa um app fechar outros apps nem limpar o lixo deles sozinho. Com o assistente ligado, quando você pede, o Luma Boost abre as informações de cada app e toca em \"Forçar parada\" ou \"Limpar cache\" por você, como você faria com o dedo. Ele não lê, não guarda e não envia nada da sua tela, e nunca toca em \"Limpar armazenamento\".</string>
 </resources>

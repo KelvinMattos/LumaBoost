@@ -5,3 +5,7 @@ captures/
 local.properties
 *.iml
 app/build/
+keystore/
+keystore.properties
+*.jks
+.DS_Store

@@ -1,998 +1,411 @@
 package com.kelvin.lumaboost;
 
-import android.annotation.SuppressLint;
 import android.app.Activity;
-import android.app.ActivityManager;
-import android.content.Context;
 import android.content.Intent;
-import android.graphics.Canvas;
+import android.content.res.Configuration;
 import android.graphics.Color;
-import android.graphics.ColorFilter;
-import android.graphics.Paint;
-import android.graphics.Path;
-import android.graphics.PixelFormat;
-import android.graphics.Rect;
-import android.graphics.RectF;
 import android.graphics.Typeface;
-import android.graphics.drawable.Drawable;
-import android.graphics.drawable.GradientDrawable;
-import android.os.Bundle;
 import android.os.Build;
-import android.os.Environment;
-import android.os.Handler;
-import android.os.Looper;
-import android.os.Process;
-import android.os.StatFs;
-import android.os.SystemClock;
-import android.provider.Settings;
+import android.os.Bundle;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.view.WindowInsets;
+import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.TextView;
-import android.widget.Toast;
 
-import java.io.File;
-import java.util.Locale;
-
-@SuppressLint("SetTextI18n")
 public final class MainActivity extends Activity {
-    private static final int BACKGROUND = Color.rgb(246, 247, 249);
-    private static final int SURFACE = Color.WHITE;
-    private static final int TEXT = Color.rgb(17, 24, 39);
-    private static final int MUTED = Color.rgb(102, 112, 133);
-    private static final int BLUE = Color.rgb(0, 122, 255);
-    private static final int GREEN = Color.rgb(52, 199, 89);
-    private static final int ORANGE = Color.rgb(255, 159, 10);
-    private static final int RED = Color.rgb(255, 59, 48);
-    private static final int BORDER = Color.rgb(229, 231, 235);
+    static final String ACTION_BOOST = "com.kelvin.lumaboost.BOOST";
+    static final String ACTION_CLEAN = "com.kelvin.lumaboost.CLEAN";
+    static final String ACTION_RETURN = "com.kelvin.lumaboost.RETURN";
+    private static final String STATE_TAB = "tab";
 
-    private final Handler handler = new Handler(Looper.getMainLooper());
-    private final Runnable refreshRunnable = new Runnable() {
-        @Override
-        public void run() {
-            refreshStats();
-            handler.postDelayed(this, 3500L);
-        }
-    };
-
-    private MemoryOptimizer optimizer;
-    private DeviceSampler sampler;
-    private MemoryGaugeView gaugeView;
-    private TextView statusTitle;
-    private TextView statusDetail;
-    private TextView ramFreeValue;
-    private TextView ramUsedValue;
-    private TextView cpuValue;
-    private TextView heapValue;
-    private TextView storageFreeValue;
-    private TextView uptimeValue;
-    private TextView lastActionValue;
-    private LinearLayout signalsList;
+    private final String[] tabLabels = {"Início", "Limpeza", "Apps", "Ajustes"};
+    private final String[] tabIcons = {"boost", "clean", "apps", "tune"};
+    private Screen[] screens;
+    private FrameLayout container;
+    private LinearLayout nav;
+    private int current = -1;
+    private Onboarding onboarding;
+    private boolean resumed;
+    private String layoutKey;
+    private static final int NAV_HEIGHT_DP = 72;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
+        Ui.applyTheme(this);
+        if (Ui.dark()) {
+            setTheme(R.style.AppTheme_Dark);
+        }
         super.onCreate(savedInstanceState);
-        optimizer = new MemoryOptimizer(getApplicationContext());
-        sampler = new DeviceSampler(this);
         configureSystemBars();
-        setContentView(createContent());
-        refreshStats();
+        screens = new Screen[]{new HomeScreen(this), new CleanScreen(this), new AppsScreen(this), new TweaksScreen(this)};
+        buildChrome();
+
+        int tab = savedInstanceState == null ? 0 : savedInstanceState.getInt(STATE_TAB, 0);
+        if (!Prefs.onboardingDone(this)) {
+            showOnboarding();
+        } else {
+            select(tab);
+            handleIntent(getIntent());
+        }
+        if (Prefs.autoClean(this)) {
+            AutoCleanJob.schedule(this, true);
+        }
+        if (ForceStopService.isEnabled(this)) {
+            // Ligado pela pessoa (tutorial ou ADB): conta como consentimento para religar depois.
+            Prefs.setAssistantConsent(this, true);
+        } else if (FireTv.is(this) && Prefs.assistantConsent(this)) {
+            // O Android desliga o assistente quando o Luma é forçado a parar; no Fire TV não há tela para religar.
+            ForceStopService.enableSelf(this);
+        }
+        if (Prefs.monitorEnabled(this)) {
+            MonitorService.start(this);
+        }
+    }
+
+    /**
+     * Monta a moldura do app: no celular, conteúdo com a barra de abas embaixo; em tablets e TVs,
+     * navegação lateral (trilho de ícones ou barra com nomes, conforme a largura) e conteúdo ao lado.
+     */
+    private void buildChrome() {
+        layoutKey = layoutKey();
+        final boolean large = Ui.large(this);
+        container = new FrameLayout(this);
+        final LinearLayout root;
+        if (large) {
+            root = Ui.horizontal(this);
+            root.setGravity(Gravity.NO_GRAVITY);
+            nav = Ui.vertical(this);
+            nav.setBackgroundColor(Ui.SURFACE);
+            int width = Ui.expandedNav(this) ? 256 : 96;
+            root.addView(nav, new LinearLayout.LayoutParams(Ui.dp(this, width), ViewGroup.LayoutParams.MATCH_PARENT));
+            View divider = new View(this);
+            divider.setBackgroundColor(Ui.BORDER);
+            root.addView(divider, new LinearLayout.LayoutParams(1, ViewGroup.LayoutParams.MATCH_PARENT));
+            root.addView(container, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
+        } else {
+            root = Ui.vertical(this);
+            root.addView(container, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+            View divider = new View(this);
+            divider.setBackgroundColor(Ui.BORDER);
+            root.addView(divider, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1));
+            nav = Ui.horizontal(this);
+            nav.setBackgroundColor(Ui.SURFACE);
+            root.addView(nav, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, NAV_HEIGHT_DP)));
+        }
+        root.setBackgroundColor(Ui.BACKGROUND);
+        setContentView(root);
+        // Desenha de borda a borda em todas as versões (obrigatório no Android 15+) e recua o conteúdo das barras.
+        root.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @Override
+            @SuppressWarnings("deprecation")
+            public WindowInsets onApplyWindowInsets(View view, WindowInsets insets) {
+                int left;
+                int top;
+                int right;
+                int bottom;
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                    left = bars.left;
+                    top = bars.top;
+                    right = bars.right;
+                    bottom = bars.bottom;
+                } else {
+                    left = insets.getSystemWindowInsetLeft();
+                    top = insets.getSystemWindowInsetTop();
+                    right = insets.getSystemWindowInsetRight();
+                    bottom = insets.getSystemWindowInsetBottom();
+                }
+                if (large) {
+                    // A barra lateral desce por trás da barra de status; o conteúdo começa abaixo dela.
+                    view.setPadding(left, 0, right, 0);
+                    nav.setPadding(nav.getPaddingLeft(), top + Ui.dp(MainActivity.this, 20), nav.getPaddingRight(), bottom);
+                    container.setPadding(0, top, 0, bottom);
+                } else {
+                    view.setPadding(left, top, right, 0);
+                    nav.setPadding(0, 0, 0, bottom);
+                    ViewGroup.LayoutParams params = nav.getLayoutParams();
+                    params.height = Ui.dp(MainActivity.this, NAV_HEIGHT_DP) + bottom;
+                    nav.setLayoutParams(params);
+                }
+                return insets;
+            }
+        });
+        if (onboarding != null) {
+            nav.setVisibility(View.GONE);
+        }
+    }
+
+    private String layoutKey() {
+        return Ui.large(this) + "/" + Ui.twoColumns(this) + "/" + Ui.expandedNav(this);
+    }
+
+    /** A tela gira sem recriar a Activity: se mudou entre uma e duas colunas, remonta as views. */
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        if (layoutKey().equals(layoutKey)) {
+            return;
+        }
+        int tab = current;
+        if (current >= 0) {
+            screens[current].onHide();
+        }
+        for (Screen screen : screens) {
+            screen.reset();
+        }
+        current = -1;
+        buildChrome();
+        if (onboarding != null) {
+            onboarding = new Onboarding(this, onboarding.index());
+            container.addView(onboarding.view(), new FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        } else {
+            select(Math.max(0, tab));
+        }
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        handleIntent(intent);
+    }
+
+    private void handleIntent(Intent intent) {
+        if (intent == null) {
+            return;
+        }
+        if (onboarding != null) {
+            return;
+        }
+        if (ACTION_BOOST.equals(intent.getAction())) {
+            select(0);
+            ((HomeScreen) screens[0]).startOptimization();
+        } else if (ACTION_CLEAN.equals(intent.getAction())) {
+            select(1);
+        }
+        intent.setAction(Intent.ACTION_MAIN);
     }
 
     @Override
     protected void onResume() {
         super.onResume();
-        handler.removeCallbacks(refreshRunnable);
-        handler.post(refreshRunnable);
+        resumed = true;
+        if (onboarding != null) {
+            onboarding.onResume();
+        } else if (current >= 0) {
+            screens[current].onShow();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (onboarding != null) {
+            onboarding.onResume();
+        } else if (current >= 0) {
+            screens[current].onShow();
+        }
+    }
+
+    /** Mostra o tutorial no lugar das abas (primeira abertura ou "Ver o tutorial de novo"). */
+    void showOnboarding() {
+        if (current >= 0) {
+            screens[current].onHide();
+        }
+        current = -1;
+        onboarding = new Onboarding(this);
+        container.removeAllViews();
+        container.addView(onboarding.view(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        nav.setVisibility(View.GONE);
+    }
+
+    void finishOnboarding(boolean optimizeNow) {
+        Prefs.setOnboardingDone(this, true);
+        onboarding = null;
+        nav.setVisibility(View.VISIBLE);
+        select(0);
+        if (optimizeNow) {
+            ((HomeScreen) screens[0]).startOptimization();
+        }
     }
 
     @Override
     protected void onPause() {
-        handler.removeCallbacks(refreshRunnable);
+        resumed = false;
+        if (current >= 0) {
+            screens[current].onHide();
+        }
         super.onPause();
     }
 
     @Override
-    public void onTrimMemory(int level) {
-        super.onTrimMemory(level);
-        optimizer.releaseLocalPressure();
+    protected void onSaveInstanceState(Bundle outState) {
+        super.onSaveInstanceState(outState);
+        outState.putInt(STATE_TAB, current);
     }
 
-    private View createContent() {
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(false);
-        scrollView.setClipToPadding(false);
-        scrollView.setBackgroundColor(BACKGROUND);
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        for (Screen screen : screens) {
+            screen.onActivityResult(requestCode, resultCode, data);
+        }
+    }
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(22), dp(24), dp(22), dp(28));
-        scrollView.addView(root, new ScrollView.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
+    @Override
+    public void onBackPressed() {
+        if (onboarding == null && current != 0) {
+            select(0);
+            return;
+        }
+        super.onBackPressed();
+    }
 
-        root.addView(createHeader());
-        addGap(root, 18);
+    void select(int index) {
+        if (index == current) {
+            return;
+        }
+        if (current >= 0) {
+            screens[current].onHide();
+        }
+        current = index;
+        container.removeAllViews();
+        container.addView(screens[index].view(), new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        renderNav();
+        if (resumed) {
+            screens[index].onShow();
+        }
+    }
 
-        gaugeView = new MemoryGaugeView(this);
-        gaugeView.setElevation(dp(1));
-        root.addView(gaugeView, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(260)
-        ));
-        addGap(root, 14);
-
-        root.addView(createStatusPanel());
-        addGap(root, 18);
-
-        root.addView(sectionTitle("Leitura atual"));
-        addGap(root, 8);
-        root.addView(createStatsGrid());
-        addGap(root, 18);
-
-        root.addView(sectionTitle("Ações rápidas"));
-        addGap(root, 8);
-        root.addView(actionButton("Otimizar agora", "boost", true, new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                runOptimization();
+    private void renderNav() {
+        nav.removeAllViews();
+        boolean large = Ui.large(this);
+        boolean expanded = Ui.expandedNav(this);
+        if (large) {
+            nav.setGravity(expanded ? Gravity.NO_GRAVITY : Gravity.CENTER_HORIZONTAL);
+            int side = Ui.dp(this, expanded ? 20 : 12);
+            nav.setPadding(side, nav.getPaddingTop(), side, nav.getPaddingBottom());
+            nav.addView(brand(expanded));
+            Ui.gap(nav, expanded ? 32 : 28);
+        }
+        for (int i = 0; i < tabLabels.length; i++) {
+            final int index = i;
+            View item = large && expanded ? sideItem(i) : stackedItem(i, large);
+            item.setContentDescription(tabLabels[i]);
+            item.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    select(index);
+                }
+            });
+            if (large) {
+                LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, Ui.dp(this, expanded ? 54 : 76));
+                params.setMargins(0, 0, 0, Ui.dp(this, expanded ? 6 : 8));
+                nav.addView(item, params);
+            } else {
+                nav.addView(item, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f));
             }
-        }));
-        addGap(root, 10);
-        root.addView(actionButton("Apps do sistema", "apps", false, new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                openSystemScreen(Settings.ACTION_MANAGE_APPLICATIONS_SETTINGS);
-            }
-        }));
-        addGap(root, 10);
-        root.addView(actionButton("Armazenamento", "storage", false, new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                openSystemScreen(Settings.ACTION_INTERNAL_STORAGE_SETTINGS);
-            }
-        }));
-        addGap(root, 10);
-        root.addView(actionButton("Bateria", "battery", false, new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                openSystemScreen(Settings.ACTION_BATTERY_SAVER_SETTINGS);
-            }
-        }));
-        addGap(root, 10);
-        root.addView(actionButton("Atualizar leitura", "refresh", false, new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                refreshStats();
-            }
-        }));
-        addGap(root, 18);
-
-        root.addView(sectionTitle("Sinais do sistema"));
-        addGap(root, 8);
-        signalsList = new LinearLayout(this);
-        signalsList.setOrientation(LinearLayout.VERTICAL);
-        root.addView(signalsList, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        return scrollView;
-    }
-
-    private View createHeader() {
-        LinearLayout header = new LinearLayout(this);
-        header.setOrientation(LinearLayout.VERTICAL);
-
-        TextView title = new TextView(this);
-        title.setText("Luma Boost");
-        title.setTextColor(TEXT);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 34);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setIncludeFontPadding(false);
-        header.addView(title, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        TextView subtitle = new TextView(this);
-        subtitle.setText("Performance limpa, monitor leve e controle seguro.");
-        subtitle.setTextColor(MUTED);
-        subtitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
-        subtitle.setIncludeFontPadding(true);
-        subtitle.setLineSpacing(dp(1), 1.0f);
-        header.addView(subtitle, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-        ));
-
-        return header;
-    }
-
-    private View createStatusPanel() {
-        LinearLayout panel = new LinearLayout(this);
-        panel.setOrientation(LinearLayout.VERTICAL);
-        panel.setPadding(dp(18), dp(16), dp(18), dp(16));
-        panel.setBackground(rounded(SURFACE, BORDER, 1, 8));
-        panel.setElevation(dp(1));
-
-        statusTitle = new TextView(this);
-        statusTitle.setTextColor(TEXT);
-        statusTitle.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
-        statusTitle.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        statusTitle.setIncludeFontPadding(false);
-        panel.addView(statusTitle);
-
-        addGap(panel, 6);
-
-        statusDetail = new TextView(this);
-        statusDetail.setTextColor(MUTED);
-        statusDetail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        statusDetail.setLineSpacing(dp(2), 1.0f);
-        panel.addView(statusDetail);
-
-        addGap(panel, 12);
-
-        lastActionValue = new TextView(this);
-        lastActionValue.setText("Pronto para otimizar.");
-        lastActionValue.setTextColor(BLUE);
-        lastActionValue.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        lastActionValue.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        panel.addView(lastActionValue);
-
-        return panel;
-    }
-
-    private View createStatsGrid() {
-        LinearLayout wrapper = new LinearLayout(this);
-        wrapper.setOrientation(LinearLayout.VERTICAL);
-
-        LinearLayout firstRow = new LinearLayout(this);
-        firstRow.setOrientation(LinearLayout.HORIZONTAL);
-        ramFreeValue = valueText();
-        ramUsedValue = valueText();
-        firstRow.addView(statCard("RAM livre", ramFreeValue), weightedCardParams(true));
-        firstRow.addView(statCard("RAM usada", ramUsedValue), weightedCardParams(false));
-        wrapper.addView(firstRow);
-
-        addGap(wrapper, 10);
-
-        LinearLayout secondRow = new LinearLayout(this);
-        secondRow.setOrientation(LinearLayout.HORIZONTAL);
-        cpuValue = valueText();
-        heapValue = valueText();
-        secondRow.addView(statCard("CPU do app", cpuValue), weightedCardParams(true));
-        secondRow.addView(statCard("Heap do app", heapValue), weightedCardParams(false));
-        wrapper.addView(secondRow);
-
-        addGap(wrapper, 10);
-
-        LinearLayout thirdRow = new LinearLayout(this);
-        thirdRow.setOrientation(LinearLayout.HORIZONTAL);
-        storageFreeValue = valueText();
-        uptimeValue = valueText();
-        thirdRow.addView(statCard("Armazenamento livre", storageFreeValue), weightedCardParams(true));
-        thirdRow.addView(statCard("Sistema ativo", uptimeValue), weightedCardParams(false));
-        wrapper.addView(thirdRow);
-
-        return wrapper;
-    }
-
-    private LinearLayout.LayoutParams weightedCardParams(boolean withEndMargin) {
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                0,
-                dp(96),
-                1.0f
-        );
-        if (withEndMargin) {
-            params.setMargins(0, 0, dp(10), 0);
         }
-        return params;
     }
 
-    private View statCard(String label, TextView value) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setGravity(Gravity.CENTER_VERTICAL);
-        card.setPadding(dp(14), dp(12), dp(14), dp(12));
-        card.setBackground(rounded(SURFACE, BORDER, 1, 8));
-        card.setElevation(dp(1));
-
-        TextView labelView = new TextView(this);
-        labelView.setText(label);
-        labelView.setTextColor(MUTED);
-        labelView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        labelView.setIncludeFontPadding(false);
-        card.addView(labelView);
-
-        addGap(card, 8);
-        card.addView(value);
-
-        return card;
-    }
-
-    private TextView valueText() {
-        TextView textView = new TextView(this);
-        textView.setTextColor(TEXT);
-        textView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 21);
-        textView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        textView.setIncludeFontPadding(false);
-        textView.setSingleLine(false);
-        return textView;
-    }
-
-    private TextView sectionTitle(String text) {
-        TextView title = new TextView(this);
-        title.setText(text);
-        title.setTextColor(TEXT);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 17);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setIncludeFontPadding(false);
-        return title;
-    }
-
-    private View actionButton(String label, String iconType, boolean primary, View.OnClickListener listener) {
-        TextView button = new TextView(this);
-        button.setText(label);
-        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
-        button.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        button.setGravity(Gravity.CENTER_VERTICAL);
-        button.setMinHeight(dp(56));
-        button.setPadding(dp(18), 0, dp(18), 0);
-        button.setTextColor(primary ? Color.WHITE : TEXT);
-        button.setBackground(primary
-                ? rounded(BLUE, BLUE, 1, 8)
-                : rounded(SURFACE, BORDER, 1, 8));
-        button.setCompoundDrawablePadding(dp(12));
-        button.setCompoundDrawablesWithIntrinsicBounds(
-                new ActionIconDrawable(iconType, primary ? Color.WHITE : BLUE, dp(22)),
-                null,
-                null,
-                null
-        );
-        button.setOnClickListener(listener);
-        button.setClickable(true);
-        button.setFocusable(true);
-        applySelectableForeground(button);
-
-        return button;
-    }
-
-    private void refreshStats() {
-        DeviceSnapshot snapshot = sampler.read();
-        int pressure = snapshot.usedPercent();
-        int score = snapshot.score();
-
-        gaugeView.setMetrics(score, pressure, snapshot.lowMemory);
-        ramFreeValue.setText(formatBytes(snapshot.availableBytes));
-        ramUsedValue.setText(String.format(Locale.getDefault(), "%d%%", pressure));
-        cpuValue.setText(formatCpu(snapshot.cpuPercent));
-        heapValue.setText(formatBytes(snapshot.appHeapUsedBytes));
-        storageFreeValue.setText(formatBytes(snapshot.storageAvailableBytes));
-        uptimeValue.setText(formatDuration(snapshot.uptimeMs));
-
-        if (snapshot.lowMemory || pressure >= 90) {
-            statusTitle.setText("Pressão alta");
-            statusDetail.setText("RAM disponível: " + formatBytes(snapshot.availableBytes)
-                    + " de " + formatBytes(snapshot.totalBytes)
-                    + ". Use os atalhos para revisar apps, bateria e armazenamento.");
-        } else if (pressure >= 76) {
-            statusTitle.setText("Atenção");
-            statusDetail.setText("RAM disponível: " + formatBytes(snapshot.availableBytes)
-                    + " de " + formatBytes(snapshot.totalBytes)
-                    + ". Armazenamento livre: " + formatBytes(snapshot.storageAvailableBytes) + ".");
-        } else {
-            statusTitle.setText("Estável");
-            statusDetail.setText("RAM disponível: " + formatBytes(snapshot.availableBytes)
-                    + " de " + formatBytes(snapshot.totalBytes)
-                    + ". O Luma está operando em modo leve e sem serviço persistente.");
+    /** Logo do Luma no topo da navegação lateral. */
+    private View brand(boolean expanded) {
+        LinearLayout row = Ui.horizontal(this);
+        row.setGravity(expanded ? Gravity.CENTER_VERTICAL : Gravity.CENTER);
+        FrameLayout logo = new FrameLayout(this);
+        logo.setBackground(Ui.gradient(this, 14));
+        logo.setElevation(Ui.dp(this, 4));
+        View bolt = new View(this);
+        bolt.setBackground(new IconDrawable("boost", Color.WHITE, Ui.dp(this, 24)));
+        FrameLayout.LayoutParams boltParams = new FrameLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24));
+        boltParams.gravity = Gravity.CENTER;
+        logo.addView(bolt, boltParams);
+        row.addView(logo, new LinearLayout.LayoutParams(Ui.dp(this, 44), Ui.dp(this, 44)));
+        if (expanded) {
+            LinearLayout texts = Ui.vertical(this);
+            texts.setPadding(Ui.dp(this, 12), 0, 0, 0);
+            texts.addView(Ui.title(this, "Luma Boost", 18));
+            Ui.gap(texts, 3);
+            texts.addView(Ui.small(this, "Otimizador do " + Ui.device(this), Ui.MUTED));
+            row.addView(texts, Ui.weight(1));
         }
-
-        updateSignals(snapshot);
-    }
-
-    private void updateSignals(DeviceSnapshot snapshot) {
-        signalsList.removeAllViews();
-        signalsList.addView(signalRow("Memória", signalTextForMemory(snapshot), colorForScore(snapshot.score())));
-        addGap(signalsList, 8);
-        signalsList.addView(signalRow("CPU local", cpuSignal(snapshot), cpuColor(snapshot)));
-        addGap(signalsList, 8);
-        signalsList.addView(signalRow("Armazenamento", storageSignal(snapshot), storageColor(snapshot)));
-        addGap(signalsList, 8);
-        signalsList.addView(signalRow("Recomendação", recommendationText(snapshot), BLUE));
-        addGap(signalsList, 8);
-        signalsList.addView(signalRow("Privacidade", "Sem permissões invasivas, sem monitor em segundo plano e sem coleta externa.", GREEN));
-    }
-
-    private String signalTextForMemory(DeviceSnapshot snapshot) {
-        if (snapshot.lowMemory) {
-            return "O Android marcou o dispositivo em baixa memória.";
-        }
-        if (snapshot.usedPercent() >= 90) {
-            return "Uso alto de RAM detectado agora.";
-        }
-        if (snapshot.usedPercent() >= 76) {
-            return "Uso moderado, com margem reduzida.";
-        }
-        return "Uso saudável para a leitura atual.";
-    }
-
-    private String cpuSignal(DeviceSnapshot snapshot) {
-        if (snapshot.cpuPercent < 1.0d) {
-            return "Consumo abaixo de 1% nesta amostra.";
-        }
-        return "Consumo de " + formatCpu(snapshot.cpuPercent) + " nesta amostra.";
-    }
-
-    private String storageSignal(DeviceSnapshot snapshot) {
-        int freePercent = snapshot.storageFreePercent();
-        if (freePercent <= 8) {
-            return "Pouco espaço livre: " + formatBytes(snapshot.storageAvailableBytes)
-                    + " de " + formatBytes(snapshot.storageTotalBytes) + ".";
-        }
-        if (freePercent <= 15) {
-            return "Espaço livre moderado: " + formatBytes(snapshot.storageAvailableBytes)
-                    + " disponíveis.";
-        }
-        return "Espaço saudável: " + formatBytes(snapshot.storageAvailableBytes)
-                + " disponíveis.";
-    }
-
-    private String recommendationText(DeviceSnapshot snapshot) {
-        if (snapshot.lowMemory || snapshot.usedPercent() >= 90) {
-            return "Toque em otimizar e revise apps recentes na tela do sistema.";
-        }
-        if (snapshot.storageFreePercent() <= 15) {
-            return "Abra Armazenamento para remover arquivos grandes e caches de outros apps.";
-        }
-        if (snapshot.cpuPercent >= 20.0d) {
-            return "Aguarde uma nova leitura ou feche tarefas pesadas antes de jogar ou editar.";
-        }
-        return "Nenhuma ação urgente. Mantenha o app leve e atualize a leitura quando precisar.";
-    }
-
-    private int cpuColor(DeviceSnapshot snapshot) {
-        if (snapshot.cpuPercent >= 20.0d) {
-            return ORANGE;
-        }
-        return GREEN;
-    }
-
-    private int storageColor(DeviceSnapshot snapshot) {
-        if (snapshot.storageFreePercent() <= 8) {
-            return RED;
-        }
-        if (snapshot.storageFreePercent() <= 15) {
-            return ORANGE;
-        }
-        return GREEN;
-    }
-
-    private View signalRow(String label, String value, int accent) {
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.setGravity(Gravity.CENTER_VERTICAL);
-        row.setPadding(dp(14), dp(12), dp(14), dp(12));
-        row.setBackground(rounded(SURFACE, BORDER, 1, 8));
-
-        View dot = new View(this);
-        dot.setBackground(oval(accent));
-        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(10), dp(10));
-        dotParams.setMargins(0, 0, dp(12), 0);
-        row.addView(dot, dotParams);
-
-        LinearLayout textColumn = new LinearLayout(this);
-        textColumn.setOrientation(LinearLayout.VERTICAL);
-
-        TextView title = new TextView(this);
-        title.setText(label);
-        title.setTextColor(TEXT);
-        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
-        title.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        title.setIncludeFontPadding(false);
-        textColumn.addView(title);
-
-        addGap(textColumn, 4);
-
-        TextView detail = new TextView(this);
-        detail.setText(value);
-        detail.setTextColor(MUTED);
-        detail.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
-        detail.setLineSpacing(dp(1), 1.0f);
-        textColumn.addView(detail);
-
-        row.addView(textColumn, new LinearLayout.LayoutParams(
-                0,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                1.0f
-        ));
-
         return row;
     }
 
-    private void runOptimization() {
-        OptimizationResult result = optimizer.optimize();
-        refreshStats();
-
-        String cacheFreed = formatBytes(result.cacheBytesFreed);
-        String heapReleased = formatBytes(Math.max(0L, result.heapBytesReleased));
-        lastActionValue.setText("Liberado: " + cacheFreed + " em cache | heap: " + heapReleased + ".");
-
-        Toast.makeText(
-                this,
-                "Otimização concluída",
-                Toast.LENGTH_SHORT
-        ).show();
+    /** Item da barra lateral larga: ícone e nome lado a lado, com fundo no selecionado. */
+    private View sideItem(int i) {
+        boolean selected = i == current;
+        int color = selected ? Ui.BLUE : Ui.MUTED;
+        TextView item = new TextView(this);
+        item.setText(tabLabels[i]);
+        item.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        item.setTextColor(selected ? Ui.BLUE : Ui.TEXT);
+        item.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
+        item.setGravity(Gravity.CENTER_VERTICAL);
+        item.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 16), 0);
+        item.setCompoundDrawablePadding(Ui.dp(this, 14));
+        item.setCompoundDrawablesWithIntrinsicBounds(new IconDrawable(tabIcons[i], color, Ui.dp(this, 22)), null, null, null);
+        if (selected) {
+            item.setBackground(Ui.rounded(this, Ui.BLUE_SOFT, Ui.BLUE_SOFT, 0, 14));
+        }
+        Ui.selectable(item, 14);
+        return item;
     }
 
-    private void openSystemScreen(String action) {
-        Intent intent = new Intent(action);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        try {
-            startActivity(intent);
-        } catch (RuntimeException exception) {
-            Intent fallback = new Intent(Settings.ACTION_SETTINGS);
-            fallback.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-            try {
-                startActivity(fallback);
-            } catch (RuntimeException fallbackException) {
-                Toast.makeText(this, "Não foi possível abrir esta tela do sistema.", Toast.LENGTH_SHORT).show();
-            }
+    /** Item com ícone sobre o nome (barra de baixo e trilho lateral), com uma pílula atrás do ícone selecionado. */
+    private View stackedItem(int i, boolean rail) {
+        boolean selected = i == current;
+        int color = selected ? Ui.BLUE : Ui.MUTED;
+        LinearLayout item = Ui.vertical(this);
+        item.setGravity(Gravity.CENTER);
+        FrameLayout indicator = new FrameLayout(this);
+        if (selected) {
+            indicator.setBackground(Ui.rounded(this, Ui.BLUE_SOFT, Ui.BLUE_SOFT, 0, 16));
         }
+        View icon = new View(this);
+        icon.setBackground(new IconDrawable(tabIcons[i], color, Ui.dp(this, 22)));
+        FrameLayout.LayoutParams iconParams = new FrameLayout.LayoutParams(Ui.dp(this, 22), Ui.dp(this, 22));
+        iconParams.gravity = Gravity.CENTER;
+        indicator.addView(icon, iconParams);
+        item.addView(indicator, new LinearLayout.LayoutParams(Ui.dp(this, 60), Ui.dp(this, 32)));
+        TextView label = new TextView(this);
+        label.setText(tabLabels[i]);
+        label.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        label.setTextColor(selected ? Ui.TEXT : Ui.MUTED);
+        label.setTypeface(Typeface.create("sans-serif-medium", selected ? Typeface.BOLD : Typeface.NORMAL));
+        label.setGravity(Gravity.CENTER);
+        label.setPadding(0, Ui.dp(this, 4), 0, 0);
+        item.addView(label, Ui.matchWrap());
+        Ui.selectable(item, rail ? 16 : 0);
+        return item;
     }
 
     @SuppressWarnings("deprecation")
     private void configureSystemBars() {
         Window window = getWindow();
-        window.setStatusBarColor(BACKGROUND);
-        window.setNavigationBarColor(BACKGROUND);
-        int flags = View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        window.setStatusBarColor(Color.TRANSPARENT);
+        window.setNavigationBarColor(Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? Color.TRANSPARENT : Color.BLACK);
+        window.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(Ui.BACKGROUND));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            window.setNavigationBarContrastEnforced(false);
+        }
+        int flags = View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION;
+        if (!Ui.dark()) {
+            flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !Ui.dark()) {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
-        getWindow().getDecorView().setSystemUiVisibility(flags);
-    }
-
-    private void applySelectableForeground(View view) {
-        TypedValue outValue = new TypedValue();
-        getTheme().resolveAttribute(android.R.attr.selectableItemBackground, outValue, true);
-        view.setForeground(getResources().getDrawable(outValue.resourceId, getTheme()));
-    }
-
-    private GradientDrawable rounded(int fillColor, int strokeColor, int strokeWidthDp, float radiusDp) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setColor(fillColor);
-        drawable.setCornerRadius(dp(radiusDp));
-        drawable.setStroke(dp(strokeWidthDp), strokeColor);
-        return drawable;
-    }
-
-    private GradientDrawable oval(int color) {
-        GradientDrawable drawable = new GradientDrawable();
-        drawable.setShape(GradientDrawable.OVAL);
-        drawable.setColor(color);
-        return drawable;
-    }
-
-    private void addGap(LinearLayout parent, int heightDp) {
-        View gap = new View(this);
-        parent.addView(gap, new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                dp(heightDp)
-        ));
-    }
-
-    private int colorForScore(int score) {
-        if (score >= 55) {
-            return GREEN;
-        }
-        if (score >= 30) {
-            return ORANGE;
-        }
-        return RED;
-    }
-
-    private String formatCpu(double cpuPercent) {
-        if (cpuPercent < 1.0d) {
-            return "<1%";
-        }
-        return String.format(Locale.getDefault(), "%.0f%%", Math.min(cpuPercent, 100.0d));
-    }
-
-    private String formatBytes(long bytes) {
-        double value = Math.max(0L, bytes);
-        String[] units = {"B", "KB", "MB", "GB", "TB"};
-        int unit = 0;
-        while (value >= 1024.0d && unit < units.length - 1) {
-            value /= 1024.0d;
-            unit++;
-        }
-        if (unit == 0) {
-            return String.format(Locale.getDefault(), "%.0f %s", value, units[unit]);
-        }
-        if (value >= 10.0d) {
-            return String.format(Locale.getDefault(), "%.0f %s", value, units[unit]);
-        }
-        return String.format(Locale.getDefault(), "%.1f %s", value, units[unit]);
-    }
-
-    private String formatDuration(long milliseconds) {
-        long totalMinutes = Math.max(0L, milliseconds / 60000L);
-        long days = totalMinutes / 1440L;
-        long hours = (totalMinutes % 1440L) / 60L;
-        long minutes = totalMinutes % 60L;
-        if (days > 0L) {
-            return String.format(Locale.getDefault(), "%dd %dh", days, hours);
-        }
-        if (hours > 0L) {
-            return String.format(Locale.getDefault(), "%dh %dm", hours, minutes);
-        }
-        return String.format(Locale.getDefault(), "%dm", minutes);
-    }
-
-    private int dp(float value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private static final class DeviceSampler {
-        private final ActivityManager activityManager;
-        private long lastCpuMs;
-        private long lastWallMs;
-
-        DeviceSampler(Context context) {
-            activityManager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
-        }
-
-        DeviceSnapshot read() {
-            ActivityManager.MemoryInfo memoryInfo = new ActivityManager.MemoryInfo();
-            activityManager.getMemoryInfo(memoryInfo);
-
-            long nowCpuMs = Process.getElapsedCpuTime();
-            long nowWallMs = SystemClock.elapsedRealtime();
-            double cpuPercent = 0.0d;
-
-            if (lastWallMs > 0L) {
-                long wallDelta = Math.max(1L, nowWallMs - lastWallMs);
-                long cpuDelta = Math.max(0L, nowCpuMs - lastCpuMs);
-                int cores = Math.max(1, Runtime.getRuntime().availableProcessors());
-                cpuPercent = (cpuDelta * 100.0d) / (wallDelta * cores);
-            }
-
-            lastCpuMs = nowCpuMs;
-            lastWallMs = nowWallMs;
-
-            Runtime runtime = Runtime.getRuntime();
-            long appHeapUsed = runtime.totalMemory() - runtime.freeMemory();
-            long appHeapMax = runtime.maxMemory();
-            StatFs dataStats = new StatFs(Environment.getDataDirectory().getAbsolutePath());
-            long storageAvailable = dataStats.getAvailableBytes();
-            long storageTotal = dataStats.getTotalBytes();
-
-            return new DeviceSnapshot(
-                    memoryInfo.availMem,
-                    memoryInfo.totalMem,
-                    memoryInfo.threshold,
-                    memoryInfo.lowMemory,
-                    appHeapUsed,
-                    appHeapMax,
-                    cpuPercent,
-                    storageAvailable,
-                    storageTotal,
-                    SystemClock.elapsedRealtime()
-            );
-        }
-    }
-
-    private static final class DeviceSnapshot {
-        final long availableBytes;
-        final long totalBytes;
-        final long thresholdBytes;
-        final boolean lowMemory;
-        final long appHeapUsedBytes;
-        final long appHeapMaxBytes;
-        final double cpuPercent;
-        final long storageAvailableBytes;
-        final long storageTotalBytes;
-        final long uptimeMs;
-
-        DeviceSnapshot(
-                long availableBytes,
-                long totalBytes,
-                long thresholdBytes,
-                boolean lowMemory,
-                long appHeapUsedBytes,
-                long appHeapMaxBytes,
-                double cpuPercent,
-                long storageAvailableBytes,
-                long storageTotalBytes,
-                long uptimeMs
-        ) {
-            this.availableBytes = availableBytes;
-            this.totalBytes = Math.max(1L, totalBytes);
-            this.thresholdBytes = thresholdBytes;
-            this.lowMemory = lowMemory;
-            this.appHeapUsedBytes = appHeapUsedBytes;
-            this.appHeapMaxBytes = appHeapMaxBytes;
-            this.cpuPercent = cpuPercent;
-            this.storageAvailableBytes = storageAvailableBytes;
-            this.storageTotalBytes = Math.max(1L, storageTotalBytes);
-            this.uptimeMs = uptimeMs;
-        }
-
-        int usedPercent() {
-            long usedBytes = Math.max(0L, totalBytes - availableBytes);
-            return clamp(Math.round((usedBytes * 100.0f) / totalBytes));
-        }
-
-        int score() {
-            int score = 100 - usedPercent();
-            if (lowMemory || availableBytes < thresholdBytes) {
-                score = Math.min(score, 24);
-            }
-            return clamp(score);
-        }
-
-        int storageFreePercent() {
-            return clamp(Math.round((storageAvailableBytes * 100.0f) / storageTotalBytes));
-        }
-
-        private static int clamp(int value) {
-            return Math.max(0, Math.min(100, value));
-        }
-    }
-
-    private static final class MemoryOptimizer {
-        private final Context appContext;
-
-        MemoryOptimizer(Context context) {
-            appContext = context.getApplicationContext();
-        }
-
-        OptimizationResult optimize() {
-            Runtime runtime = Runtime.getRuntime();
-            long heapBefore = runtime.totalMemory() - runtime.freeMemory();
-            long cacheFreed = cleanAppCaches();
-            releaseLocalPressure();
-            long heapAfter = runtime.totalMemory() - runtime.freeMemory();
-            return new OptimizationResult(cacheFreed, heapBefore - heapAfter);
-        }
-
-        void releaseLocalPressure() {
-            System.gc();
-            System.runFinalization();
-            Runtime.getRuntime().gc();
-        }
-
-        private long cleanAppCaches() {
-            long freed = 0L;
-            freed += deleteContents(appContext.getCacheDir());
-            if (Environment.MEDIA_MOUNTED.equals(Environment.getExternalStorageState())) {
-                File[] externalCaches = appContext.getExternalCacheDirs();
-                if (externalCaches != null) {
-                    for (File cache : externalCaches) {
-                        freed += deleteContents(cache);
-                    }
-                }
-            }
-            return freed;
-        }
-
-        private long deleteContents(File directory) {
-            if (directory == null || !directory.exists() || !directory.isDirectory()) {
-                return 0L;
-            }
-            File[] children = directory.listFiles();
-            if (children == null) {
-                return 0L;
-            }
-            long freed = 0L;
-            for (File child : children) {
-                freed += deleteRecursively(child);
-            }
-            return freed;
-        }
-
-        private long deleteRecursively(File file) {
-            if (file == null || !file.exists()) {
-                return 0L;
-            }
-            long freed = 0L;
-            if (file.isDirectory()) {
-                File[] children = file.listFiles();
-                if (children != null) {
-                    for (File child : children) {
-                        freed += deleteRecursively(child);
-                    }
-                }
-            } else {
-                freed = Math.max(0L, file.length());
-            }
-            if (!file.delete() && !file.isDirectory()) {
-                return 0L;
-            }
-            return freed;
-        }
-    }
-
-    private static final class OptimizationResult {
-        final long cacheBytesFreed;
-        final long heapBytesReleased;
-
-        OptimizationResult(long cacheBytesFreed, long heapBytesReleased) {
-            this.cacheBytesFreed = cacheBytesFreed;
-            this.heapBytesReleased = heapBytesReleased;
-        }
-    }
-
-    private final class MemoryGaugeView extends View {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final RectF cardRect = new RectF();
-        private final RectF arcRect = new RectF();
-        private int score = 100;
-        private int usedPercent = 0;
-        private boolean lowMemory;
-
-        MemoryGaugeView(Context context) {
-            super(context);
-            setLayerType(View.LAYER_TYPE_SOFTWARE, null);
-            setContentDescription("Indicador de folga do sistema");
-        }
-
-        void setMetrics(int score, int usedPercent, boolean lowMemory) {
-            this.score = Math.max(0, Math.min(100, score));
-            this.usedPercent = Math.max(0, Math.min(100, usedPercent));
-            this.lowMemory = lowMemory;
-            invalidate();
-        }
-
-        @Override
-        protected void onDraw(Canvas canvas) {
-            super.onDraw(canvas);
-            float width = getWidth();
-            float height = getHeight();
-            cardRect.set(0, 0, width, height);
-
-            paint.setStyle(Paint.Style.FILL);
-            paint.setColor(SURFACE);
-            paint.setShadowLayer(dp(8), 0, dp(3), Color.argb(18, 15, 23, 42));
-            canvas.drawRoundRect(cardRect, dp(8), dp(8), paint);
-            paint.clearShadowLayer();
-
-            float size = Math.min(width, height) - dp(72);
-            float left = (width - size) / 2.0f;
-            float top = dp(48);
-            arcRect.set(left, top, left + size, top + size);
-
-            paint.setStyle(Paint.Style.STROKE);
-            paint.setStrokeWidth(dp(14));
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setColor(Color.rgb(232, 236, 241));
-            canvas.drawArc(arcRect, 140.0f, 260.0f, false, paint);
-
-            paint.setColor(colorForScore(score));
-            canvas.drawArc(arcRect, 140.0f, 260.0f * (score / 100.0f), false, paint);
-
-            paint.setStrokeCap(Paint.Cap.BUTT);
-            paint.setStyle(Paint.Style.FILL);
-            paint.setTextAlign(Paint.Align.CENTER);
-
-            paint.setColor(MUTED);
-            paint.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-            paint.setTextSize(dp(13));
-            canvas.drawText("FOLGA DO SISTEMA", width / 2.0f, dp(32), paint);
-
-            paint.setColor(TEXT);
-            paint.setTypeface(Typeface.create("sans-serif", Typeface.BOLD));
-            paint.setTextSize(dp(56));
-            Paint.FontMetrics numberMetrics = paint.getFontMetrics();
-            float numberBase = arcRect.centerY() - (numberMetrics.ascent + numberMetrics.descent) / 2.0f - dp(4);
-            canvas.drawText(String.valueOf(score), width / 2.0f, numberBase, paint);
-
-            paint.setColor(MUTED);
-            paint.setTypeface(Typeface.create("sans-serif", Typeface.NORMAL));
-            paint.setTextSize(dp(14));
-            String caption = lowMemory ? "baixa memória" : "RAM usada: " + usedPercent + "%";
-            canvas.drawText(caption, width / 2.0f, arcRect.bottom + dp(28), paint);
-        }
-    }
-
-    private static final class ActionIconDrawable extends Drawable {
-        private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        private final Path path = new Path();
-        private final String type;
-        private final int color;
-        private final int size;
-
-        ActionIconDrawable(String type, int color, int size) {
-            this.type = type;
-            this.color = color;
-            this.size = size;
-            setBounds(0, 0, size, size);
-        }
-
-        @Override
-        public void draw(Canvas canvas) {
-            Rect bounds = getBounds();
-            canvas.save();
-            canvas.translate(bounds.left, bounds.top);
-            canvas.scale(bounds.width() / 24.0f, bounds.height() / 24.0f);
-            paint.setColor(color);
-            paint.setStrokeWidth(2.0f);
-            paint.setStrokeCap(Paint.Cap.ROUND);
-            paint.setStrokeJoin(Paint.Join.ROUND);
-
-            if ("boost".equals(type)) {
-                paint.setStyle(Paint.Style.FILL);
-                path.reset();
-                path.moveTo(13.0f, 2.5f);
-                path.lineTo(4.5f, 13.0f);
-                path.lineTo(11.0f, 13.0f);
-                path.lineTo(9.5f, 21.5f);
-                path.lineTo(19.5f, 9.5f);
-                path.lineTo(13.0f, 9.5f);
-                path.close();
-                canvas.drawPath(path, paint);
-            } else if ("apps".equals(type)) {
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawRoundRect(new RectF(4, 4, 10, 10), 1.6f, 1.6f, paint);
-                canvas.drawRoundRect(new RectF(14, 4, 20, 10), 1.6f, 1.6f, paint);
-                canvas.drawRoundRect(new RectF(4, 14, 10, 20), 1.6f, 1.6f, paint);
-                canvas.drawRoundRect(new RectF(14, 14, 20, 20), 1.6f, 1.6f, paint);
-            } else if ("storage".equals(type)) {
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawRoundRect(new RectF(4, 6, 20, 19), 3.0f, 3.0f, paint);
-                canvas.drawLine(7, 10, 17, 10, paint);
-                canvas.drawLine(8, 15, 11, 15, paint);
-            } else if ("battery".equals(type)) {
-                paint.setStyle(Paint.Style.STROKE);
-                canvas.drawRoundRect(new RectF(3, 7, 19, 17), 2.0f, 2.0f, paint);
-                canvas.drawRoundRect(new RectF(20, 10, 22, 14), 1.0f, 1.0f, paint);
-                paint.setStyle(Paint.Style.FILL);
-                canvas.drawRoundRect(new RectF(6, 10, 14, 14), 1.0f, 1.0f, paint);
-            } else {
-                paint.setStyle(Paint.Style.STROKE);
-                RectF arc = new RectF(5, 5, 19, 19);
-                canvas.drawArc(arc, 35, 275, false, paint);
-                paint.setStyle(Paint.Style.FILL);
-                path.reset();
-                path.moveTo(17.5f, 3.0f);
-                path.lineTo(20.5f, 8.0f);
-                path.lineTo(14.7f, 7.2f);
-                path.close();
-                canvas.drawPath(path, paint);
-            }
-            canvas.restore();
-        }
-
-        @Override
-        public void setAlpha(int alpha) {
-            paint.setAlpha(alpha);
-        }
-
-        @Override
-        public void setColorFilter(ColorFilter colorFilter) {
-            paint.setColorFilter(colorFilter);
-        }
-
-        @Override
-        @SuppressWarnings("deprecation")
-        public int getOpacity() {
-            return PixelFormat.TRANSLUCENT;
-        }
-
-        @Override
-        public int getIntrinsicWidth() {
-            return size;
-        }
-
-        @Override
-        public int getIntrinsicHeight() {
-            return size;
-        }
+        window.getDecorView().setSystemUiVisibility(flags);
     }
 }

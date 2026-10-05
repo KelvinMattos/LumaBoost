@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Fundo escuro já na abertura, antes de o app aplicar o tema escuro. -->
+    <color name="luma_window">#0A0E1A</color>
+</resources>

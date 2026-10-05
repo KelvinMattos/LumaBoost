@@ -1,5 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="luma_background">#F6F7F9</color>
-    <color name="luma_blue">#007AFF</color>
+    <color name="luma_background">#F4F6FB</color>
+    <color name="luma_window">#F4F6FB</color>
+    <color name="luma_blue">#2F6BFF</color>
+    <color name="luma_background_dark">#0A0E1A</color>
+    <color name="luma_blue_dark">#5C8CFF</color>
 </resources>
